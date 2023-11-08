@@ -335,17 +335,30 @@ def export_transformer_model(
 
     # TODO: Integrate with external parameters to actually be able to run
     # TODO: Make more generalizable to be able to quantize with all  compile_to options
-    if args.quantization == "int4" and compile_to == "torch":
+    if args.quantization == "int4":# and compile_to == "torch":
         from shark_turbine.transforms.quantization import mm_group_quant
         mm_group_quant.MMGroupQuantRewriterPass(CompiledModule.get_mlir_module(inst).operation).run()
 
     module_str = str(CompiledModule.get_mlir_module(inst))
+    '''
+    index = ireert.ParameterIndex()
+    
+    from pathlib import Path
+    index.load(
+            str(
+                Path(__file__).resolve().parent
+                / "testdata"
+                / "/home/ian/llama.cpp/models/7B/ggml-model-f32.gguf"
+            )
+    )
 
+    print(dir(index))
+    '''
     safe_name = hf_model_name.split("/")[-1].strip()
     safe_name = re.sub("-", "_", safe_name)
     if compile_to != "vmfb":
         dialect_postfix = compile_to
-        with open(f"{safe_name}_{compile_to}.mlir", "w+") as f:
+        with open(f"test_{safe_name}_{compile_to}.mlir", "w+") as f:
             f.write(module_str)
     else:
         flags = [
