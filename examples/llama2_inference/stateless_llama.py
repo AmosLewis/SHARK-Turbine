@@ -386,17 +386,38 @@ def export_transformer_model(
             target_backends=["llvm-cpu"],
             extra_args=flags,
         )
-        with open(f"{safe_name}.vmfb", "wb+") as f:
+        with open(f"test_{safe_name}.vmfb", "wb+") as f:
             f.write(flatbuffer_blob)
-
 
 def run_vmfb_comparison(args):
     config = ireert.Config("local-task")
     ctx = ireert.SystemContext(config=config)
-    vm_module = ireert.VmModule.mmap(
-        config.vm_instance, "/home/dan/SHARK-Turbine/Llama_2_7b_chat_hf.vmfb"
+    
+    #if args.external_params:
+    index = ireert.ParameterIndex()
+    
+    from pathlib import Path
+    index.load(
+            str(
+                Path(__file__).resolve().parent
+                / "testdata"
+                / "/home/ian/llama.cpp/models/7B/ggml-model-f32.gguf"
+            )
     )
-    ctx.add_vm_module(vm_module)
+    orig_module = ireert.VmModule.mmap(
+        config.vm_instance, "/home/ian/SHARK-Turbine/test_Llama_2_7b_chat_hf.vmfb"
+    )
+    
+    vm_modules = ireert.load_vm_modules(ireert.create_io_parameters_module(config.vm_instance, index.create_provider(scope="params")
+        ),
+        ireert.create_hal_module(config.vm_instance, config.device),
+        ireert.VmModule.mmap(config.vm_instance, "/home/ian/SHARK-Turbine/test_Llama_2_7b_chat_hf.vmfb"),
+        config=config
+    )
+    
+    vm_module = vm_modules[-1]    
+    ctx.add_vm_module(vm_module.vm_module)
+    
     ModuleCompiled = getattr(ctx.modules, vm_module.name)
     print(ModuleCompiled)
 
@@ -408,8 +429,9 @@ def run_vmfb_comparison(args):
     initial_input = tokenizer(prompt, return_tensors="pt")
     example_input_id = initial_input.input_ids
     device_inputs = [ireert.asdevicearray(config.device, example_input_id)]
-
-    results = ModuleCompiled["run_initialize"](*device_inputs)
+    
+    results = ModuleCompiled.run_initialize(*device_inputs)
+    #results = ModuleCompiled["run_initialize"](*device_inputs)
 
     def format_out(results):
         return torch.tensor(results.to_host()[0][0])
