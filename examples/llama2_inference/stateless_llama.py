@@ -384,7 +384,6 @@ def export_transformer_model(
 
 def run_vmfb_comparison(args):
     config = ireert.Config("local-task")
-    ctx = ireert.SystemContext(config=config)
     
     #if args.external_params:
     index = ireert.ParameterIndex()
@@ -397,31 +396,27 @@ def run_vmfb_comparison(args):
                 / "/home/ian/llama.cpp/models/7B/ggml-model-f32.gguf"
             )
     )
-    vm_modules = ireert.load_vm_modules(ireert.create_io_parameters_module(config.vm_instance, index.create_provider(scope="model")
+    ctx = ireert.SystemContext(vm_modules=[ireert.create_io_parameters_module(config.vm_instance, index.create_provider(scope="model")
         ),
         ireert.create_hal_module(config.vm_instance, config.device),
-        ireert.VmModule.mmap(config.vm_instance, "/home/ian/SHARK-Turbine/global_Llama_2_7b_chat_hf.vmfb"),
-        config=config
+        ireert.VmModule.mmap(config.vm_instance, "/home/ian/SHARK-Turbine/global_Llama_2_7b_chat_hf.vmfb")], config=config
     )
-
-    vm_module = vm_modules[-1]
-    ctx.add_vm_module(vm_modules[0].vm_module)
-    ctx.add_vm_module(vm_module.vm_module)
-
-    ModuleCompiled = getattr(ctx.modules, vm_module.name)
-    print(ModuleCompiled)
-
+    print("test") 
     tokenizer = AutoTokenizer.from_pretrained(
         args.hf_model_name,
         use_fast=False,
         use_auth_token=args.hf_auth_token,
     )
+    print("fail")
     initial_input = tokenizer(prompt, return_tensors="pt")
     example_input_id = initial_input.input_ids
     device_inputs = [ireert.asdevicearray(config.device, example_input_id)]
-    
-    results = ModuleCompiled["run_initialize"](*device_inputs)
 
+
+    ModuleCompiled = ctx.modules.state_update["run_initialize"]
+    print(ModuleCompiled)
+    results = ModuleCompiled(*device_inputs)
+    print("got results")
     def format_out(results):
         return torch.tensor(results.to_host()[0][0])
 
@@ -438,8 +433,10 @@ def run_vmfb_comparison(args):
     turbine_results.append(format_out(results))
     torch_results.append(int(base_model_token))
     while base_model_token != 2:
-        results = ModuleCompiled["run_forward"](results)
-        step = ModuleCompiled["get_seq_step"]()
+        run_forward_func = ModuleCompiled.vm_module.lookup_function("run_forward")
+        results = ireert.FunctionInvoker(ctx, config.device, run_forward_func, tracer=None)#ModuleCompiled["run_forward"](results)
+        step_func = ModuleCompiled.vm_module.lookup_function("get_seq_step")
+        step = ireert.FunctionInvoker(ctx, config.device, step_func, tracer=None)#ModuleCompiled["get_seq_step"]()
         pkv = ModuleCompiled["get_global_state"]().to_host()
         # print(f"turbine: {tokenizer.decode(format_out(results))}")
         base_model_results = model.base_model.forward(
