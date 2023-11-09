@@ -20,7 +20,8 @@ from torch._export.constraints import constrain_as_size, constrain_as_value
 from shark_turbine.aot import *
 from iree.compiler.ir import Context
 from iree import runtime as ireert
-
+from shark_turbine.transforms import rewriter
+from shark_turbine.transforms.general import rename_parameters
 BATCH_SIZE = 1
 MAX_STEP_SEQ = 4095
 
@@ -253,9 +254,14 @@ def export_transformer_model(
         dtype=torch.float32,
     )
     seq_step = AbstractIndex
-
+    
+    import remap_gguf
+    tensor_mapper = remap_gguf.TensorNameMap(remap_gguf.MODEL_ARCH.LLAMA, 32)
+    mapper = tensor_mapper.mapping
+    
     class StateUpdateModule(CompiledModule):
-        params = export_parameters(mod, initialize=False)
+        params = export_parameters(mod, external=True, external_scope="", name_mapper=mapper.get)
+        
         global_state = export_global(global_pkv, mutable=True, initialize=False)
         global_seq_step = export_global(
             seq_step, mutable=True, initialize=False
@@ -332,7 +338,7 @@ def export_transformer_model(
 
     import_to = "IMPORT" if compile_to == "torch" else "INPUT"
     inst = StateUpdateModule(context=Context(), import_to=import_to)
-
+    
     # TODO: Integrate with external parameters to actually be able to run
     # TODO: Make more generalizable to be able to quantize with all  compile_to options
     if args.quantization == "int4":# and compile_to == "torch":
@@ -345,7 +351,7 @@ def export_transformer_model(
     safe_name = re.sub("-", "_", safe_name)
     if compile_to != "vmfb":
         dialect_postfix = compile_to
-        with open(f"{safe_name}_{compile_to}.mlir", "w+") as f:
+        with open(f"global_mapped_test_{safe_name}_{compile_to}.mlir", "w+") as f:
             f.write(module_str)
     else:
         flags = [
@@ -373,7 +379,7 @@ def export_transformer_model(
             target_backends=["llvm-cpu"],
             extra_args=flags,
         )
-        with open(f"{safe_name}.vmfb", "wb+") as f:
+        with open(f"global_{safe_name}.vmfb", "wb+") as f:
             f.write(flatbuffer_blob)
 
 def run_vmfb_comparison(args):
@@ -382,7 +388,7 @@ def run_vmfb_comparison(args):
     
     #if args.external_params:
     index = ireert.ParameterIndex()
-    
+
     from pathlib import Path
     index.load(
             str(
@@ -391,20 +397,17 @@ def run_vmfb_comparison(args):
                 / "/home/ian/llama.cpp/models/7B/ggml-model-f32.gguf"
             )
     )
-    orig_module = ireert.VmModule.mmap(
-        config.vm_instance, "/home/ian/SHARK-Turbine/test_Llama_2_7b_chat_hf.vmfb"
-    )
-    
-    vm_modules = ireert.load_vm_modules(ireert.create_io_parameters_module(config.vm_instance, index.create_provider(scope="params")
+    vm_modules = ireert.load_vm_modules(ireert.create_io_parameters_module(config.vm_instance, index.create_provider(scope="model")
         ),
         ireert.create_hal_module(config.vm_instance, config.device),
-        ireert.VmModule.mmap(config.vm_instance, "/home/ian/SHARK-Turbine/test_Llama_2_7b_chat_hf.vmfb"),
+        ireert.VmModule.mmap(config.vm_instance, "/home/ian/SHARK-Turbine/global_Llama_2_7b_chat_hf.vmfb"),
         config=config
     )
-    
-    vm_module = vm_modules[-1]    
+
+    vm_module = vm_modules[-1]
+    ctx.add_vm_module(vm_modules[0].vm_module)
     ctx.add_vm_module(vm_module.vm_module)
-    
+
     ModuleCompiled = getattr(ctx.modules, vm_module.name)
     print(ModuleCompiled)
 
@@ -417,8 +420,7 @@ def run_vmfb_comparison(args):
     example_input_id = initial_input.input_ids
     device_inputs = [ireert.asdevicearray(config.device, example_input_id)]
     
-    results = ModuleCompiled.run_initialize(*device_inputs)
-    #results = ModuleCompiled["run_initialize"](*device_inputs)
+    results = ModuleCompiled["run_initialize"](*device_inputs)
 
     def format_out(results):
         return torch.tensor(results.to_host()[0][0])
