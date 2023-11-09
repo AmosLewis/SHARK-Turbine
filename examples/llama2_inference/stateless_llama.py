@@ -340,25 +340,12 @@ def export_transformer_model(
         mm_group_quant.MMGroupQuantRewriterPass(CompiledModule.get_mlir_module(inst).operation).run()
 
     module_str = str(CompiledModule.get_mlir_module(inst))
-    '''
-    index = ireert.ParameterIndex()
     
-    from pathlib import Path
-    index.load(
-            str(
-                Path(__file__).resolve().parent
-                / "testdata"
-                / "/home/ian/llama.cpp/models/7B/ggml-model-f32.gguf"
-            )
-    )
-
-    print(dir(index))
-    '''
     safe_name = hf_model_name.split("/")[-1].strip()
     safe_name = re.sub("-", "_", safe_name)
     if compile_to != "vmfb":
         dialect_postfix = compile_to
-        with open(f"test_{safe_name}_{compile_to}.mlir", "w+") as f:
+        with open(f"{safe_name}_{compile_to}.mlir", "w+") as f:
             f.write(module_str)
     else:
         flags = [
@@ -386,7 +373,7 @@ def export_transformer_model(
             target_backends=["llvm-cpu"],
             extra_args=flags,
         )
-        with open(f"test_{safe_name}.vmfb", "wb+") as f:
+        with open(f"{safe_name}.vmfb", "wb+") as f:
             f.write(flatbuffer_blob)
 
 def run_vmfb_comparison(args):
